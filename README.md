@@ -1,44 +1,89 @@
-This is a [Next.js](https://nextjs.org/) template to use when reporting a [bug in the Next.js repository](https://github.com/vercel/next.js/issues).
+# Repro: next/dynamic in _app.tsx causes hydration error under Turbopack
 
-## Getting Started
+Reproduction repository for [vercel/next.js#85370](https://github.com/vercel/next.js/issues/85370).
 
-These are the steps you should follow when creating a bug report:
+## Bug
 
-- Bug reports must be verified against the `next@canary` release. The canary version of Next.js ships daily and includes all features and fixes that have not been released to the stable version yet. Think of canary as a public beta. Some issues may already be fixed in the canary version, so please verify that your issue reproduces before opening a new issue. Issues not verified against `next@canary` will be closed after 30 days.
-- Make sure your issue is not a duplicate. Use the [GitHub issue search](https://github.com/vercel/next.js/issues) to see if there is already an open issue that matches yours. If that is the case, upvoting the other issue's first comment is desirable as we often prioritize issues based on the number of votes they receive. Note: Adding a "+1" or "same issue" comment without adding more context about the issue should be avoided. If you only find closed related issues, you can link to them using the issue number and `#`, eg.: `I found this related issue: #3000`.
-- If you think the issue is not in Next.js, the best place to ask for help is our [Discord community](https://nextjs.org/discord) or [GitHub discussions](https://github.com/vercel/next.js/discussions). Our community is welcoming and can often answer a project-related question faster than the Next.js core team.
-- Make the reproduction as minimal as possible. Try to exclude any code that does not help reproducing the issue. E.g. if you experience problems with Routing, including ESLint configurations or API routes aren't necessary. The less lines of code is to read through, the easier it is for the Next.js team to investigate. It may also help catching bugs in your codebase before publishing an issue.
+An SSR-enabled `next/dynamic` component in `_app.tsx` causes a hydration mismatch under Turbopack. The component's chunk is not included in Turbopack's preload manifest, so during client hydration React sees the page content where it expects the dynamic component's HTML:
 
-## How to use this template
-
-Execute [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app) with [npm](https://docs.npmjs.com/cli/init), [Yarn](https://yarnpkg.com/lang/en/docs/cli/create/), or [pnpm](https://pnpm.io) to bootstrap the example:
-
-```bash
-npx create-next-app --example reproduction-template-pages reproduction-app
+```diff
+<main>
+  <LoadableComponent>
+  <Home>
++   <p data-testid="page-index">           ← client
+-   <h1 data-testid="dynamic-component">   ← server
 ```
 
-```bash
-yarn create next-app --example reproduction-template-pages reproduction-app
+React bails out of hydration and regenerates the tree on the client. With a fragment wrapper instead of `<main>`, the symptom is a double-render (the component appears twice in the DOM).
+
+`ssr: false` components are not affected — they're skipped on the server so there's nothing to reconcile.
+
+## Repro
+
+`pages/_app.tsx`:
+
+```tsx
+const Dynamic = dynamic(() => import("../components/Dynamic")); // SSR-enabled (no ssr:false)
+
+export default function App({ Component, pageProps }) {
+  return (
+    <main>
+      <Dynamic />
+      <Component {...pageProps} />
+    </main>
+  );
+}
 ```
 
+## Versions
+
+| Version | Result |
+| ------- | ------ |
+| `15.1.6` | ✅ Works |
+| `15.2.0` | ❌ Broken — hydration error |
+| `16.1.7` | ❌ Broken — hydration error |
+| `16.2.0` | ❌ Broken — hydration error |
+| `16.2.1-canary.2` | ❌ Broken — hydration error |
+
+Fix is tracked in draft PR [#85803](https://github.com/vercel/next.js/pull/85803).
+
+## Running the repro manually
+
 ```bash
-pnpm create next-app --example reproduction-template-pages reproduction-app
+pnpm install
+pnpm dev
+# open http://localhost:3000 — observe hydration error in the browser console
 ```
 
-## Learn More
+## Automated Playwright test
 
-To learn more about Next.js, take a look at the following resources:
+The test visits `/`, waits for the dynamic component, and asserts no hydration errors and exactly **1** instance of `<Dynamic>` in the DOM.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-- [How to Contribute to Open Source (Next.js)](https://www.youtube.com/watch?v=cuoNzXFLitc) - a video tutorial by Lee Robinson
-- [Triaging in the Next.js repository](https://github.com/vercel/next.js/blob/canary/contributing.md#triaging) - how we work on issues
-- [CodeSandbox](https://codesandbox.io/s/github/vercel/next.js/tree/canary/examples/reproduction-template-pages) - Edit this repository on CodeSandbox
+```bash
+pnpm install
+pnpm playwright install chromium
+pnpm test
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
+Expected output on a broken version:
 
-## Deployment
+```text
+Error: Hydration errors detected:
+[pageerror] Hydration failed because the server rendered HTML didn't match the client...
+```
 
-If your reproduction needs to be deployed, the easiest way is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Test all versions at once
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+```bash
+./run-matrix.sh
+```
+
+Expected output (as of testing on 2026-03-20):
+
+```text
+  ✅ PASS  15.1.6 (last good)     (next@15.1.6)
+  ❌ FAIL  15.2.0 (first bad)     (next@15.2.0)
+  ❌ FAIL  16.1.7 (current)       (next@16.1.7)
+  ❌ FAIL  16.2.0 (latest stable) (next@16.2.0)
+  ❌ FAIL  16.2.1-canary.2        (next@canary)
+```

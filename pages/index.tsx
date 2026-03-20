@@ -1,4 +1,4 @@
-/** Add your relevant code here for the issue to reproduce */
+/** Broken page: Dynamic is rendered via _app.tsx — sees the double-render bug */
 export default function Home() {
-  return null;
+  return <p data-testid="page-index">index page</p>;
 }

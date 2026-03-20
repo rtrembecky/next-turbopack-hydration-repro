@@ -1,5 +1,14 @@
+import { useEffect } from "react";
+
 const Dynamic: React.FC = () => {
-  return <h1>Dynamic Component</h1>;
+  useEffect(() => {
+    console.log("[Dynamic] mounted");
+    return () => {
+      console.log("[Dynamic] unmounted");
+    };
+  }, []);
+
+  return <h1 data-testid="dynamic-component">Dynamic Component</h1>;
 };
 
 export default Dynamic;
